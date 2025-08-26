@@ -284,6 +284,12 @@ input[type="range"] {
     appearance: none;
 }
 
+input[type="range"].disabled,
+input[type="range"]:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 15px;

@@ -66,7 +66,17 @@
             <div class="card">
                 <div class="card-title">Detection Settings</div>
                 <div class="settings-group">
-                    <div class="settings-group-title">Detection Interval</div>
+                    <div class="settings-group-title">Mode</div>
+                    <div class="setting-item">
+                        <span class="setting-label">Detection Speed</span>
+                        <select id="detectionMode">
+                            <option value="auto">Auto (recommended)</option>
+                            <option value="manual">Manual</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-group-title">Manual Interval</div>
                     <div class="slider-container">
                         <label>
                             <span>PiP Detection Speed</span>
@@ -74,7 +84,7 @@
                         </label>
                         <input type="range" id="timerSetting" min="200" max="3000" step="100" value="1000">
                     </div>
-                    <small>Faster detection uses more resources but closes PiP quicker</small>
+                    <small>In Auto mode, this slider is disabled. Faster detection may use more resources.</small>
                 </div>
             </div>
 
@@ -118,7 +128,7 @@
         </div>
 
         <div class="footer">
-            <span class="version">Version 1.0.1</span> | 
+            <span class="version">Version 1.1.0</span> | 
             <a href="https://github.com/mushfikur-dwip/facebook-pip-OnOff" target="_blank">
                 <i class="fab fa-github"></i> GitHub
             </a>
