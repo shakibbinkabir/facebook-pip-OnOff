@@ -3,31 +3,60 @@ let isEnabled = false;
 let tabPause = false;
 let whitelistEnabled = false;
 let whitelist = [];
+let detectionMode = 'manual'; // 'auto' | 'manual' (default preserved for existing users)
+let detectionIntervalMs = 1000; // manual mode interval
 
 // Initialize default settings if first run
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   chrome.storage.local.get(
-    ["isEnabled", "tabPause", "timerInterval", "theme", "whitelistEnabled", "whitelist"], 
+    [
+      "isEnabled",
+      "tabPause",
+      "timerInterval",
+      "theme",
+      "whitelistEnabled",
+      "whitelist",
+      "detectionMode",
+      "detectionIntervalMs"
+    ],
     (data) => {
-      // Set defaults for any missing values
+      // Migration/defaults
+      const isNewInstall = details?.reason === 'install';
+      const isUpdate = details?.reason === 'update';
+
+      // Migration rules:
+      // - New installs: detectionMode='auto'
+      // - Updates: preserve manual with existing timerInterval if present
+      const inferredDetectionMode = data.detectionMode
+        ? data.detectionMode
+        : (isNewInstall ? 'auto' : 'manual');
+      const inferredInterval = (typeof data.detectionIntervalMs === 'number')
+        ? data.detectionIntervalMs
+        : (typeof data.timerInterval === 'number' ? data.timerInterval : 1000);
+
       const settings = {
         isEnabled: data.isEnabled !== undefined ? data.isEnabled : false,
         tabPause: data.tabPause !== undefined ? data.tabPause : false,
-        timerInterval: data.timerInterval || 1000,
+        // Preserve timerInterval for backward compatibility with older popups
+        timerInterval: typeof data.timerInterval === 'number' ? data.timerInterval : inferredInterval,
+        detectionMode: inferredDetectionMode,
+        detectionIntervalMs: inferredInterval,
         theme: data.theme || "light",
         whitelistEnabled: data.whitelistEnabled || false,
         whitelist: data.whitelist || []
       };
-      
-      // Save default settings
+
+      // Save default/migrated settings
       chrome.storage.local.set(settings);
-      
+
       // Update local variables
       isEnabled = settings.isEnabled;
       tabPause = settings.tabPause;
       whitelistEnabled = settings.whitelistEnabled;
       whitelist = settings.whitelist;
-      
+      detectionMode = settings.detectionMode;
+      detectionIntervalMs = settings.detectionIntervalMs;
+
       // Update icon
       updateIcon();
     }
@@ -86,12 +115,14 @@ chrome.action.onClicked.addListener(() => {
 
 // Load settings on startup
 chrome.storage.local.get(
-  ["isEnabled", "tabPause", "whitelistEnabled", "whitelist"], 
+  ["isEnabled", "tabPause", "whitelistEnabled", "whitelist", "detectionMode", "detectionIntervalMs"], 
   (data) => {
     isEnabled = data.isEnabled || false;
     tabPause = data.tabPause || false;
     whitelistEnabled = data.whitelistEnabled || false;
     whitelist = data.whitelist || [];
+    detectionMode = data.detectionMode || 'manual';
+    detectionIntervalMs = typeof data.detectionIntervalMs === 'number' ? data.detectionIntervalMs : 1000;
     updateIcon();
   }
 );
@@ -113,6 +144,14 @@ chrome.storage.onChanged.addListener((changes) => {
   
   if (changes.whitelist) {
     whitelist = changes.whitelist.newValue || [];
+  }
+  if (changes.detectionMode) {
+    detectionMode = changes.detectionMode.newValue || 'manual';
+  }
+  if (changes.detectionIntervalMs) {
+    detectionIntervalMs = typeof changes.detectionIntervalMs.newValue === 'number'
+      ? changes.detectionIntervalMs.newValue
+      : detectionIntervalMs;
   }
 });
 

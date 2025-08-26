@@ -4,6 +4,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const tabPauseToggle = document.getElementById("tabToggle");
   const timerSlider = document.getElementById("timerSetting");
   const timerValue = document.getElementById("timerValue");
+  const detectionModeEl = document.getElementById("detectionMode");
   const whitelistToggle = document.getElementById("whitelistToggle");
   const whitelistSection = document.getElementById("whitelistSection");
   const whitelistInput = document.getElementById("whitelistInput");
@@ -19,16 +20,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Load saved settings
   chrome.storage.local.get(
-    ["isEnabled", "tabPause", "timerInterval", "theme", "whitelistEnabled", "whitelist"],
+    ["isEnabled", "tabPause", "timerInterval", "theme", "whitelistEnabled", "whitelist", "detectionMode", "detectionIntervalMs"],
     (data) => {
       // Core settings
       pipToggle.checked = data.isEnabled || false;
       tabPauseToggle.checked = data.tabPause || false;
       
       // Timer settings
-      const savedInterval = data.timerInterval || 1000;
+      const savedInterval = typeof data.detectionIntervalMs === 'number' ? data.detectionIntervalMs : (data.timerInterval || 1000);
       timerSlider.value = savedInterval;
       timerValue.textContent = savedInterval;
+
+      // Detection mode
+      const mode = data.detectionMode || 'manual';
+      detectionModeEl.value = mode;
+      setManualSliderDisabled(mode === 'auto');
       
       // Whitelist settings
       whitelistToggle.checked = data.whitelistEnabled || false;
@@ -93,11 +99,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // Timer settings
   timerSlider.addEventListener("input", () => {
     timerValue.textContent = timerSlider.value;
-    chrome.storage.local.set({ timerInterval: Number(timerSlider.value) }, () => {
+    chrome.storage.local.set({ timerInterval: Number(timerSlider.value), detectionIntervalMs: Number(timerSlider.value) }, () => {
       if (pipToggle.checked) {
         showToast(`Detection interval set to ${timerSlider.value}ms`);
         reloadCurrentTab();
       }
+    });
+  });
+
+  // Detection mode handler
+  detectionModeEl.addEventListener('change', () => {
+    const mode = detectionModeEl.value;
+    setManualSliderDisabled(mode === 'auto');
+    chrome.storage.local.set({ detectionMode: mode }, () => {
+      showToast(mode === 'auto' ? 'Detection: Auto (recommended)' : 'Detection: Manual');
+      if (pipToggle.checked) reloadCurrentTab();
     });
   });
 
@@ -221,5 +237,10 @@ document.addEventListener("DOMContentLoaded", () => {
         ? '<i class="fas fa-moon"></i>' 
         : '<i class="fas fa-sun"></i>';
     });
+  }
+
+  function setManualSliderDisabled(disabled) {
+    timerSlider.disabled = disabled;
+    timerSlider.classList.toggle('disabled', disabled);
   }
 });
