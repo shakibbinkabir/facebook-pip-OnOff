@@ -56,10 +56,19 @@
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
-                <div class="setting-item">
-                    <button id="whitelistToggleBtn" class="btn btn-secondary" aria-live="polite">Allow PiP on this page</button>
-                    <button id="snoozeBtn" class="btn btn-secondary" disabled title="Coming in Phase 3">Snooze PiP</button>
-                </div>
+                                <div class="setting-item">
+                                        <button id="whitelistToggleBtn" class="btn btn-secondary" aria-live="polite">Allow PiP on this page</button>
+                                        <div class="dropdown">
+                                            <button id="snoozeBtn" class="btn btn-secondary" aria-haspopup="true" aria-expanded="false">Snooze PiP</button>
+                                            <div id="snoozeMenu" class="dropdown-menu" role="menu" hidden>
+                                                <button class="dropdown-item" data-snooze="15m" role="menuitem">15 minutes</button>
+                                                <button class="dropdown-item" data-snooze="1h" role="menuitem">1 hour</button>
+                                                <button class="dropdown-item" data-snooze="tab" role="menuitem">Until tab closes</button>
+                                                <div class="dropdown-sep"></div>
+                                                <button class="dropdown-item" data-snooze="cancel" role="menuitem">Cancel snooze</button>
+                                            </div>
+                                        </div>
+                                </div>
                 <div id="nonFbHelper" class="helper" hidden>
                     Open Facebook to use controls.
                     <button id="openFbBtn" class="btn btn-primary" aria-label="Open Facebook">Open Facebook</button>

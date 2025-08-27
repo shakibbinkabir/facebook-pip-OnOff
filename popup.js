@@ -15,6 +15,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const detectionChip = document.getElementById("detectionChip");
   const applyNote = document.getElementById("applyNote");
   const whitelistToggleBtn = document.getElementById("whitelistToggleBtn");
+  const snoozeBtn = document.getElementById("snoozeBtn");
+  const snoozeMenu = document.getElementById("snoozeMenu");
   const modeAuto = document.getElementById("modeAuto");
   const modeManual = document.getElementById("modeManual");
   const addCurrentBtn = document.getElementById("addCurrentBtn");
@@ -29,7 +31,7 @@ document.addEventListener("DOMContentLoaded", () => {
   Promise.all([
     new Promise(resolve => chrome.tabs.query({ active: true, currentWindow: true }, tabs => resolve(tabs?.[0] || null))),
     new Promise(resolve => chrome.storage.local.get(["isEnabled", "tabPause", "timerInterval", "theme", "whitelist", "detectionMode", "detectionIntervalMs"], resolve))
-  ]).then(([activeTab, data]) => {
+  ]).then(async ([activeTab, data]) => {
       const isFacebook = !!(activeTab?.url && /https?:\/\/(www\.)?facebook\.com/i.test(activeTab.url));
       const currentUrl = activeTab?.url || '';
 
@@ -47,12 +49,14 @@ document.addEventListener("DOMContentLoaded", () => {
       renderWhitelistList(data.whitelist);
       updateWhitelistUiForCurrent(currentUrl, data.whitelist);
 
-      renderStatusTile({ isFacebook, isEnabled: pipToggle.checked, isWhitelisted: isUrlWhitelisted(currentUrl, data.whitelist), mode });
+  renderStatusTile({ isFacebook, isEnabled: pipToggle.checked, isWhitelisted: isUrlWhitelisted(currentUrl, data.whitelist), mode });
+  await refreshSnoozeStatus();
 
-      nonFbHelper.hidden = isFacebook;
-      pipToggle.disabled = !isFacebook;
-      tabPauseToggle.disabled = !isFacebook;
-      whitelistToggleBtn.disabled = !isFacebook;
+  nonFbHelper.hidden = isFacebook;
+  pipToggle.disabled = !isFacebook;
+  tabPauseToggle.disabled = !isFacebook;
+  whitelistToggleBtn.disabled = !isFacebook;
+  snoozeBtn.disabled = !isFacebook;
   });
 
   // Tab navigation
@@ -91,6 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.storage.local.set({ isEnabled }, async () => {
       showToast(isEnabled ? "PiP Auto-Close enabled" : "PiP Auto-Close disabled");
       renderStatusTile(await computeStatus());
+  await refreshSnoozeStatus();
       const applied = await sendSettingsUpdated({ isEnabled });
       if (!applied) noteReload();
     });
@@ -137,8 +142,44 @@ document.addEventListener("DOMContentLoaded", () => {
     renderWhitelistList(next);
     updateWhitelistUiForCurrent(currentUrl, next);
     renderStatusTile(await computeStatus());
+  await refreshSnoozeStatus();
     await notifyWhitelistChange(currentUrl, !isWL);
     showToast(!isWL ? 'Added to whitelist' : 'Removed from whitelist');
+  });
+
+  // Snooze dropdown behavior
+  snoozeBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const expanded = snoozeBtn.getAttribute('aria-expanded') === 'true';
+    snoozeBtn.setAttribute('aria-expanded', (!expanded).toString());
+    snoozeMenu.hidden = expanded;
+  });
+  document.addEventListener('click', (e) => {
+    if (!snoozeMenu.hidden && !snoozeMenu.contains(e.target) && e.target !== snoozeBtn) {
+      snoozeMenu.hidden = true; snoozeBtn.setAttribute('aria-expanded', 'false');
+    }
+  });
+  snoozeMenu.addEventListener('click', async (e) => {
+    const item = e.target.closest('.dropdown-item');
+    if (!item) return;
+    const kind = item.getAttribute('data-snooze');
+    snoozeMenu.hidden = true; snoozeBtn.setAttribute('aria-expanded', 'false');
+    const tabs = await new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r));
+    const tab = tabs?.[0]; if (!tab?.id) return;
+    if (kind === 'cancel') {
+      try { await chrome.tabs.sendMessage(tab.id, { type: 'SNOOZE_CLEAR' }); showToast('Snooze cancelled'); } catch {}
+      renderStatusTile(await computeStatus());
+      await refreshSnoozeStatus();
+      return;
+    }
+    if (kind === 'tab') {
+      try { await chrome.tabs.sendMessage(tab.id, { type: 'SNOOZE_SET', scope: 'tab' }); showToast('Snoozed until tab closes'); } catch {}
+    } else {
+      const until = Date.now() + (kind === '1h' ? 60*60*1000 : 15*60*1000);
+      try { await chrome.tabs.sendMessage(tab.id, { type: 'SNOOZE_SET', until, scope: 'origin' }); showToast(kind === '1h' ? 'Snoozed for 1 hour' : 'Snoozed for 15 minutes'); } catch {}
+    }
+    renderStatusTile(await computeStatus());
+    await refreshSnoozeStatus();
   });
 
   // Settings-tab whitelist links
@@ -308,6 +349,27 @@ document.addEventListener("DOMContentLoaded", () => {
       statusTile.style.borderColor = 'var(--danger-color)';
     }
     detectionChip.textContent = `Detection: ${mode === 'auto' ? 'Auto' : 'Manual'}`;
+  }
+
+  async function refreshSnoozeStatus() {
+    const tabs = await new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r));
+    const tab = tabs?.[0]; if (!tab?.id) { statusSub.textContent = ''; return; }
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_STATE' });
+      if (!res || !res.ok) { statusSub.textContent = ''; return; }
+      if (res.isSnoozed) {
+        if (res.snoozeScope === 'tab') {
+          statusSub.textContent = 'Snoozed until tab closes';
+        } else if (typeof res.snoozeUntil === 'number') {
+          const mins = Math.max(1, Math.round((res.snoozeUntil - Date.now())/60000));
+          statusSub.textContent = `Snoozed ~${mins} min left`;
+        } else {
+          statusSub.textContent = 'Snoozed';
+        }
+      } else {
+        statusSub.textContent = '';
+      }
+    } catch { statusSub.textContent = ''; }
   }
 
   function initTheme() {
