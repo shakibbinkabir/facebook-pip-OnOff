@@ -19,10 +19,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const snoozeMenu = document.getElementById("snoozeMenu");
   const modeAuto = document.getElementById("modeAuto");
   const modeManual = document.getElementById("modeManual");
-  const addCurrentBtn = document.getElementById("addCurrentBtn");
-  const removeCurrentBtn = document.getElementById("removeCurrentBtn");
   const nonFbHelper = document.getElementById("nonFbHelper");
   const openFbBtn = document.getElementById("openFbBtn");
+  // Phase 4: New whitelist UI elements
+  const whitelistInput = document.getElementById("whitelistInput");
+  const addPatternBtn = document.getElementById("addPatternBtn");
+  const validationError = document.getElementById("validationError");
+  const addCurrentExactBtn = document.getElementById("addCurrentExactBtn");
+  const addCurrentPatternBtn = document.getElementById("addCurrentPatternBtn");
 
   // Initialize theme
   initTheme();
@@ -182,27 +186,106 @@ document.addEventListener("DOMContentLoaded", () => {
     await refreshSnoozeStatus();
   });
 
-  // Settings-tab whitelist links
-  addCurrentBtn.addEventListener('click', async () => {
-    const { activeTab, whitelist } = await getActiveAndWhitelist();
-    if (!activeTab?.url) return;
-    const next = toggleWhitelistEntry(whitelist, activeTab.url, true);
-    await new Promise(r => chrome.storage.local.set({ whitelist: next }, r));
-    renderWhitelistList(next);
-    updateWhitelistUiForCurrent(activeTab.url, next);
-    renderStatusTile(await computeStatus());
-    await notifyWhitelistChange(activeTab.url, true);
+  // Settings-tab whitelist links - removed legacy handlers
+  // Phase 4: Enhanced whitelist event handlers
+  addPatternBtn.addEventListener('click', async () => {
+    const inputValue = whitelistInput.value.trim();
+    if (!inputValue) return;
+
+    const isPattern = inputValue.includes('*');
+    const type = isPattern ? 'pattern' : 'exact';
+    
+    // Validate input
+    if (isPattern) {
+      const validation = validatePattern(inputValue);
+      if (!validation.isValid) {
+        validationError.textContent = validation.errors.join('. ');
+        validationError.hidden = false;
+        return;
+      }
+    } else {
+      // Validate exact URL
+      try {
+        const u = new URL(inputValue);
+        if (!u.hostname.includes('facebook.com')) {
+          validationError.textContent = 'URL must be for facebook.com';
+          validationError.hidden = false;
+          return;
+        }
+      } catch {
+        validationError.textContent = 'Please enter a valid URL';
+        validationError.hidden = false;
+        return;
+      }
+    }
+
+    // Clear validation error
+    validationError.hidden = true;
+
+    const { whitelist } = await new Promise(r => chrome.storage.local.get(['whitelist'], r));
+    const newWhitelist = addWhitelistEntry(whitelist, type, inputValue);
+    
+    if (newWhitelist.length === migrateWhitelistToNewFormat(whitelist).length) {
+      showToast('Entry already exists', 'error');
+      return;
+    }
+
+    await new Promise(r => chrome.storage.local.set({ whitelist: newWhitelist }, r));
+    renderWhitelistList(newWhitelist);
+    whitelistInput.value = '';
+    showToast(`${isPattern ? 'Pattern' : 'URL'} added to whitelist`);
+    
+    // Notify active tab if applicable
+    const tabs = await new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r));
+    const tab = tabs?.[0];
+    if (tab?.id && tab.url) {
+      await notifyWhitelistChange(tab.url, isUrlWhitelisted(tab.url, newWhitelist));
+      renderStatusTile(await computeStatus());
+    }
   });
 
-  removeCurrentBtn.addEventListener('click', async () => {
+  addCurrentExactBtn.addEventListener('click', async () => {
     const { activeTab, whitelist } = await getActiveAndWhitelist();
     if (!activeTab?.url) return;
-    const next = toggleWhitelistEntry(whitelist, activeTab.url, false);
-    await new Promise(r => chrome.storage.local.set({ whitelist: next }, r));
-    renderWhitelistList(next);
-    updateWhitelistUiForCurrent(activeTab.url, next);
+    
+    const newWhitelist = addWhitelistEntry(whitelist, 'exact', activeTab.url);
+    await new Promise(r => chrome.storage.local.set({ whitelist: newWhitelist }, r));
+    renderWhitelistList(newWhitelist);
+    updateWhitelistUiForCurrent(activeTab.url, newWhitelist);
     renderStatusTile(await computeStatus());
-    await notifyWhitelistChange(activeTab.url, false);
+    await notifyWhitelistChange(activeTab.url, true);
+    showToast('Current page added (exact)');
+  });
+
+  addCurrentPatternBtn.addEventListener('click', async () => {
+    const { activeTab, whitelist } = await getActiveAndWhitelist();
+    if (!activeTab?.url) return;
+    
+    const suggestedPattern = suggestPatternForUrl(activeTab.url);
+    if (!suggestedPattern) {
+      showToast('Cannot suggest pattern for this URL', 'error');
+      return;
+    }
+    
+    const newWhitelist = addWhitelistEntry(whitelist, 'pattern', suggestedPattern);
+    await new Promise(r => chrome.storage.local.set({ whitelist: newWhitelist }, r));
+    renderWhitelistList(newWhitelist);
+    updateWhitelistUiForCurrent(activeTab.url, newWhitelist);
+    renderStatusTile(await computeStatus());
+    await notifyWhitelistChange(activeTab.url, true);
+    showToast('Current section added (pattern)');
+  });
+
+  // Clear validation error on input
+  whitelistInput.addEventListener('input', () => {
+    validationError.hidden = true;
+  });
+
+  // Handle Enter key in input
+  whitelistInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      addPatternBtn.click();
+    }
   });
 
   // Send feedback via Email API
@@ -238,27 +321,39 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function addWhitelistItem(url) {
+  function addWhitelistItem(entry) {
+    // Handle both legacy string format and new object format
+    const isLegacyString = typeof entry === 'string';
+    const type = isLegacyString ? 'exact' : entry.type;
+    const value = isLegacyString ? entry : entry.value;
+    const displayChip = type === 'pattern' ? 'Pattern' : 'Exact';
+    const chipClass = type === 'pattern' ? 'chip-pattern' : 'chip-exact';
+    
     const item = document.createElement("div");
     item.className = "whitelist-item";
     item.innerHTML = `
-      <span>${url}</span>
-      <button class="remove-whitelist" data-url="${url}">
+      <div class="whitelist-item-content">
+        <span class="whitelist-url">${value}</span>
+        <span class="whitelist-chip ${chipClass}">${displayChip}</span>
+      </div>
+      <button class="remove-whitelist" data-type="${type}" data-value="${value}">
         <i class="fas fa-times"></i>
       </button>
     `;
     
     item.querySelector(".remove-whitelist").addEventListener("click", function() {
-      const urlToRemove = this.getAttribute("data-url");
+      const entryType = this.getAttribute("data-type");
+      const entryValue = this.getAttribute("data-value");
+      
       chrome.storage.local.get(["whitelist"], (data) => {
         const whitelist = data.whitelist || [];
-        const newWhitelist = whitelist.filter(item => item !== urlToRemove);
+        const newWhitelist = removeWhitelistEntry(whitelist, entryType, entryValue);
         chrome.storage.local.set({ whitelist: newWhitelist }, () => {
           item.remove();
-          showToast("URL removed from whitelist");
+          showToast("Entry removed from whitelist");
           chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
             const tab = tabs?.[0];
-            if (tab?.id && tab.url && tab.url.includes(urlToRemove)) {
+            if (tab?.id && tab.url) {
               await notifyWhitelistChange(tab.url, false);
               renderStatusTile(await computeStatus());
             }
@@ -280,9 +375,97 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 3000);
   }
 
-  function isUrlWhitelisted(url, list) {
-    if (!Array.isArray(list)) return false;
-    return list.some(entry => url.includes(entry));
+  // Phase 4: Enhanced whitelist functions with pattern support
+  function isUrlWhitelisted(url, entries) {
+    if (!Array.isArray(entries)) return false;
+    
+    // Handle legacy format (Array<string>) for backward compatibility
+    if (entries.length > 0 && typeof entries[0] === 'string') {
+      return entries.some(entry => url.includes(entry));
+    }
+
+    const normalizedUrl = normalizeUrlForWhitelist(url);
+    
+    // Check exact matches first
+    const exactMatch = entries.some(entry => 
+      entry.type === 'exact' && entry.value === normalizedUrl
+    );
+    if (exactMatch) return true;
+
+    // Check pattern matches
+    return entries.some(entry => {
+      if (entry.type !== 'pattern') return false;
+      try {
+        const regex = patternToRegex(entry.value);
+        return regex.test(normalizedUrl);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function migrateWhitelistToNewFormat(oldWhitelist) {
+    if (!Array.isArray(oldWhitelist)) return [];
+    
+    // If already new format, return as-is
+    if (oldWhitelist.length > 0 && typeof oldWhitelist[0] === 'object' && oldWhitelist[0].type) {
+      return oldWhitelist;
+    }
+
+    // Migrate legacy string array to new format
+    return oldWhitelist.map(url => ({
+      type: 'exact',
+      value: normalizeUrlForWhitelist(url),
+      createdAt: Date.now()
+    }));
+  }
+
+  function addWhitelistEntry(entries, type, value) {
+    const normalized = type === 'pattern' ? normalizePattern(value) : normalizeUrlForWhitelist(value);
+    const migrated = migrateWhitelistToNewFormat(entries);
+    
+    // Check for duplicates
+    const isDuplicate = migrated.some(entry => 
+      entry.type === type && entry.value === normalized
+    );
+    
+    if (isDuplicate) return migrated;
+
+    return [...migrated, {
+      type,
+      value: normalized,
+      createdAt: Date.now()
+    }];
+  }
+
+  function removeWhitelistEntry(entries, type, value) {
+    const normalized = type === 'pattern' ? normalizePattern(value) : normalizeUrlForWhitelist(value);
+    const migrated = migrateWhitelistToNewFormat(entries);
+    
+    return migrated.filter(entry => 
+      !(entry.type === type && entry.value === normalized)
+    );
+  }
+
+  function findMatchingWhitelistEntries(entries, url) {
+    const migrated = migrateWhitelistToNewFormat(entries);
+    const normalizedUrl = normalizeUrlForWhitelist(url);
+    
+    const matches = migrated.filter(entry => {
+      if (entry.type === 'exact') {
+        return entry.value === normalizedUrl;
+      } else if (entry.type === 'pattern') {
+        try {
+          const regex = patternToRegex(entry.value);
+          return regex.test(normalizedUrl);
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+
+    return matches;
   }
 
   function normalizeUrlForWhitelist(raw) {
@@ -292,16 +475,86 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch { return raw; }
   }
 
-  function toggleWhitelistEntry(whitelist, url, add) {
-    const entry = normalizeUrlForWhitelist(url);
-    const list = Array.isArray(whitelist) ? [...whitelist] : [];
-    const exists = list.some(i => i === entry || url.includes(i));
-    if (add) {
-      if (!exists) list.push(entry);
-    } else {
-      return list.filter(i => i !== entry);
+  // Phase 4: Pattern-based whitelist utilities
+  function normalizePattern(pattern) {
+    try {
+      const u = new URL(pattern.replace(/\*+/g, 'PLACEHOLDER'));
+      const normalizedPath = u.pathname.replace(/PLACEHOLDER/g, '*').replace(/\/$/, '');
+      return `${u.origin}${normalizedPath}`;
+    } catch { return pattern; }
+  }
+
+  function validatePattern(pattern) {
+    const errors = [];
+    
+    if (!pattern || typeof pattern !== 'string') {
+      return { isValid: false, errors: ['Pattern cannot be empty'] };
     }
-    return list;
+
+    // Must start with https://www.facebook.com/
+    if (!pattern.startsWith('https://www.facebook.com/')) {
+      errors.push('Pattern must start with https://www.facebook.com/');
+    }
+
+    // Only allowed characters: letters, digits, '-', '_', '/', ':', '.', '*'
+    const allowedChars = /^[a-zA-Z0-9\-_\/:.*]*$/;
+    if (!allowedChars.test(pattern)) {
+      errors.push('Only letters, digits, \'-\', \'_\', \'/\', \':\', \'.\', \'*\' are allowed');
+    }
+
+    // At least one non-empty path char after origin
+    const pathPart = pattern.replace('https://www.facebook.com', '');
+    if (!pathPart || pathPart === '/' || pathPart === '') {
+      errors.push('Must include a path after https://www.facebook.com/');
+    }
+
+    return { isValid: errors.length === 0, errors };
+  }
+
+  function patternToRegex(pattern) {
+    // Escape regex characters except '*'
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    // Replace '*' with '.*'
+    const withWildcards = escaped.replace(/\*/g, '.*');
+    // Anchor with ^ and $
+    return new RegExp(`^${withWildcards}$`);
+  }
+
+  function suggestPatternForUrl(url) {
+    try {
+      const u = new URL(url);
+      if (!u.hostname.includes('facebook.com')) return null;
+      
+      const pathSegments = u.pathname.split('/').filter(Boolean);
+      if (pathSegments.length === 0) return `${u.origin}/*`;
+
+      // Pattern suggestions based on FB page types
+      if (pathSegments[0] === 'watch') {
+        return `${u.origin}/watch/*`;
+      }
+      if (pathSegments.includes('videos')) {
+        return `${u.origin}/*/videos/*`;
+      }
+      if (pathSegments[0] === 'groups') {
+        return `${u.origin}/groups/*/*`;
+      }
+      
+      // Fallback: first segment + wildcard
+      return `${u.origin}/${pathSegments[0]}/*`;
+    } catch {
+      return null;
+    }
+  }
+
+  function toggleWhitelistEntry(whitelist, url, add) {
+    const normalizedUrl = normalizeUrlForWhitelist(url);
+    const migrated = migrateWhitelistToNewFormat(whitelist);
+    
+    if (add) {
+      return addWhitelistEntry(migrated, 'exact', normalizedUrl);
+    } else {
+      return removeWhitelistEntry(migrated, 'exact', normalizedUrl);
+    }
   }
 
   async function getActiveAndWhitelist() {
@@ -319,7 +572,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderWhitelistList(list) {
     whitelistItems.innerHTML = '';
-    (Array.isArray(list) ? list : []).forEach(url => addWhitelistItem(url));
+    const migrated = migrateWhitelistToNewFormat(list || []);
+    migrated.forEach(entry => addWhitelistItem(entry));
   }
 
   async function computeStatus() {
@@ -402,8 +656,17 @@ document.addEventListener("DOMContentLoaded", () => {
     const tabs = await new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r));
     const tab = tabs?.[0];
     if (!tab?.id) return false;
+    
+    // Get current whitelist to send with message
+    const { whitelist } = await new Promise(r => chrome.storage.local.get(['whitelist'], r));
+    
     try {
-      const res = await chrome.tabs.sendMessage(tab.id, { type: 'WHITELIST_STATUS_CHANGED', url, isWhitelisted });
+      const res = await chrome.tabs.sendMessage(tab.id, { 
+        type: 'WHITELIST_STATUS_CHANGED', 
+        url, 
+        isWhitelisted,
+        newWhitelist: whitelist
+      });
       return !!(res && res.ok);
     } catch { return false; }
   }

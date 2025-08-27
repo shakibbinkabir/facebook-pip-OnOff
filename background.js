@@ -6,6 +6,128 @@ let whitelist = [];
 let detectionMode = 'manual'; // 'auto' | 'manual' (default preserved for existing users)
 let detectionIntervalMs = 1000; // manual mode interval
 
+// Phase 4: Pattern utilities for context menu
+function normalizeUrlForWhitelist(raw) {
+  try {
+    const u = new URL(raw);
+    return `${u.origin}${u.pathname}`.replace(/\/$/, '');
+  } catch { return raw; }
+}
+
+function suggestPatternForUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.includes('facebook.com')) return null;
+    
+    const pathSegments = u.pathname.split('/').filter(Boolean);
+    if (pathSegments.length === 0) return `${u.origin}/*`;
+
+    if (pathSegments[0] === 'watch') {
+      return `${u.origin}/watch/*`;
+    }
+    if (pathSegments.includes('videos')) {
+      return `${u.origin}/*/videos/*`;
+    }
+    if (pathSegments[0] === 'groups') {
+      return `${u.origin}/groups/*/*`;
+    }
+    
+    return `${u.origin}/${pathSegments[0]}/*`;
+  } catch {
+    return null;
+  }
+}
+
+function migrateWhitelistToNewFormat(oldWhitelist) {
+  if (!Array.isArray(oldWhitelist)) return [];
+  
+  if (oldWhitelist.length > 0 && typeof oldWhitelist[0] === 'object' && oldWhitelist[0].type) {
+    return oldWhitelist;
+  }
+
+  return oldWhitelist.map(url => ({
+    type: 'exact',
+    value: normalizeUrlForWhitelist(url),
+    createdAt: Date.now()
+  }));
+}
+
+function addWhitelistEntry(entries, type, value) {
+  const normalized = type === 'pattern' ? value : normalizeUrlForWhitelist(value);
+  const migrated = migrateWhitelistToNewFormat(entries);
+  
+  const isDuplicate = migrated.some(entry => 
+    entry.type === type && entry.value === normalized
+  );
+  
+  if (isDuplicate) return migrated;
+
+  return [...migrated, {
+    type,
+    value: normalized,
+    createdAt: Date.now()
+  }];
+}
+
+function removeMatchingWhitelistEntry(entries, url) {
+  const migrated = migrateWhitelistToNewFormat(entries);
+  const normalizedUrl = normalizeUrlForWhitelist(url);
+  
+  // Find exact match first
+  const exactMatch = migrated.find(entry => 
+    entry.type === 'exact' && entry.value === normalizedUrl
+  );
+  
+  if (exactMatch) {
+    return migrated.filter(entry => entry !== exactMatch);
+  }
+  
+  // Find pattern matches and remove the most specific (longest)
+  const patternMatches = migrated.filter(entry => {
+    if (entry.type !== 'pattern') return false;
+    try {
+      const regex = new RegExp(`^${entry.value.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+      return regex.test(normalizedUrl);
+    } catch {
+      return false;
+    }
+  });
+  
+  if (patternMatches.length > 0) {
+    // Remove the longest (most specific) pattern
+    const toRemove = patternMatches.reduce((longest, current) => 
+      current.value.length > longest.value.length ? current : longest
+    );
+    return migrated.filter(entry => entry !== toRemove);
+  }
+  
+  return migrated;
+}
+
+function isUrlWhitelistedInBackground(url, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return false;
+  
+  const migrated = migrateWhitelistToNewFormat(entries);
+  const normalizedUrl = normalizeUrlForWhitelist(url);
+  
+  // Check exact matches first
+  const hasExact = migrated.some(entry => 
+    entry.type === 'exact' && entry.value === normalizedUrl
+  );
+  if (hasExact) return true;
+  
+  // Check pattern matches
+  return migrated.some(entry => {
+    if (entry.type !== 'pattern') return false;
+    try {
+      const regex = new RegExp(`^${entry.value.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+      return regex.test(normalizedUrl);
+    } catch {
+      return false;
+    }
+  });
+}
+
 // Initialize default settings if first run
 chrome.runtime.onInstalled.addListener((details) => {
   chrome.storage.local.get(
@@ -59,8 +181,91 @@ chrome.runtime.onInstalled.addListener((details) => {
 
       // Update icon
       updateIcon();
+      
+      // Phase 4: Create context menus
+      createContextMenus();
     }
   );
+});
+
+// Phase 4: Context menu functionality
+function createContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'allow-pip-exact',
+      title: 'Allow PiP on this page (exact)',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://www.facebook.com/*']
+    });
+    
+    chrome.contextMenus.create({
+      id: 'allow-pip-pattern',
+      title: 'Allow PiP for this section (pattern)',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://www.facebook.com/*']
+    });
+    
+    chrome.contextMenus.create({
+      id: 'remove-whitelist',
+      title: 'Remove whitelist for this page/section',
+      contexts: ['page'],
+      documentUrlPatterns: ['https://www.facebook.com/*']
+    });
+  });
+}
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (!tab?.url || !tab.id) return;
+  
+  try {
+    const { whitelist } = await new Promise(r => chrome.storage.local.get(['whitelist'], r));
+    let newWhitelist = [...(whitelist || [])];
+    let message = '';
+    
+    switch (info.menuItemId) {
+      case 'allow-pip-exact': {
+        newWhitelist = addWhitelistEntry(newWhitelist, 'exact', tab.url);
+        message = 'Page added to whitelist (exact)';
+        break;
+      }
+      case 'allow-pip-pattern': {
+        const suggestedPattern = suggestPatternForUrl(tab.url);
+        if (suggestedPattern) {
+          newWhitelist = addWhitelistEntry(newWhitelist, 'pattern', suggestedPattern);
+          message = 'Section added to whitelist (pattern)';
+        } else {
+          message = 'Cannot create pattern for this URL';
+        }
+        break;
+      }
+      case 'remove-whitelist': {
+        const oldLength = migrateWhitelistToNewFormat(newWhitelist).length;
+        newWhitelist = removeMatchingWhitelistEntry(newWhitelist, tab.url);
+        const newLength = migrateWhitelistToNewFormat(newWhitelist).length;
+        message = oldLength > newLength ? 'Whitelist entry removed' : 'No matching whitelist entry found';
+        break;
+      }
+    }
+    
+    // Save changes and notify tab
+    await new Promise(r => chrome.storage.local.set({ whitelist: newWhitelist }, r));
+    
+    // Update local state
+    whitelist = newWhitelist;
+    
+    // Notify the tab immediately
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'WHITELIST_STATUS_CHANGED',
+        url: tab.url,
+        isWhitelisted: true, // Will be recalculated in content script
+        newWhitelist: newWhitelist
+      });
+    } catch {}
+    
+  } catch (error) {
+    console.error('Context menu handler error:', error);
+  }
 });
 
 // Toggle enabled state
@@ -124,6 +329,9 @@ chrome.storage.local.get(
     detectionMode = data.detectionMode || 'manual';
     detectionIntervalMs = typeof data.detectionIntervalMs === 'number' ? data.detectionIntervalMs : 1000;
     updateIcon();
+    
+    // Phase 4: Create context menus on startup
+    createContextMenus();
   }
 );
 
@@ -166,7 +374,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     let shouldRun = true;
     
     if (whitelistEnabled && whitelist && whitelist.length > 0) {
-      shouldRun = !whitelist.some(url => tab.url.includes(url));
+      shouldRun = !isUrlWhitelistedInBackground(tab.url, whitelist);
     }
     
     if (isEnabled || tabPause) {
