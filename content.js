@@ -507,6 +507,27 @@
     startIfAllowed();
   });
 
+  // Phase 4: Listen for storage changes to update whitelist cache
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.whitelist) {
+      state.whitelist = changes.whitelist.newValue || [];
+      compileWhitelistCache(state.whitelist);
+      log('Whitelist updated from storage change');
+      
+      // Recheck if current page should still have observers running
+      const wasActive = state.observersActive;
+      const shouldBeActive = state.isEnabled && !isWhitelistedUrl() && !isSnoozed();
+      
+      if (wasActive && !shouldBeActive) {
+        lifecycle.disconnect();
+        scheduler.stop();
+      } else if (!wasActive && shouldBeActive) {
+        lifecycle.connect();
+        scheduler.start();
+      }
+    }
+  });
+
   // Live updates via messages from popup/background
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
@@ -520,6 +541,11 @@
           if (typeof message.payload.tabPause === 'boolean') state.tabPause = message.payload.tabPause;
           if (typeof message.payload.detectionMode === 'string') state.detectionMode = message.payload.detectionMode;
           if (typeof message.payload.detectionIntervalMs === 'number') state.detectionIntervalMs = message.payload.detectionIntervalMs;
+          // Phase 4: Handle whitelist updates
+          if (Array.isArray(message.payload.whitelist)) {
+            state.whitelist = message.payload.whitelist;
+            compileWhitelistCache(state.whitelist);
+          }
         }
 
         // Update tab pause listeners

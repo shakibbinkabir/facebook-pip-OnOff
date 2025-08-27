@@ -104,6 +104,30 @@ function removeMatchingWhitelistEntry(entries, url) {
   return migrated;
 }
 
+function validatePattern(pattern) {
+  const errors = [];
+  
+  if (!pattern || typeof pattern !== 'string') {
+    return { isValid: false, errors: ['Pattern cannot be empty'] };
+  }
+
+  if (!pattern.startsWith('https://www.facebook.com/')) {
+    errors.push('Pattern must start with https://www.facebook.com/');
+  }
+
+  const allowedChars = /^[a-zA-Z0-9\-_\/:.*]*$/;
+  if (!allowedChars.test(pattern)) {
+    errors.push('Only letters, digits, \'-\', \'_\', \'/\', \':\', \'.\', \'*\' are allowed');
+  }
+
+  const pathPart = pattern.replace('https://www.facebook.com', '');
+  if (!pathPart || pathPart === '/' || pathPart === '') {
+    errors.push('Must include a path after https://www.facebook.com/');
+  }
+
+  return { isValid: errors.length === 0, errors };
+}
+
 function isUrlWhitelistedInBackground(url, entries) {
   if (!Array.isArray(entries) || entries.length === 0) return false;
   
@@ -165,7 +189,7 @@ chrome.runtime.onInstalled.addListener((details) => {
         detectionIntervalMs: inferredInterval,
         theme: data.theme || "light",
         whitelistEnabled: data.whitelistEnabled || false,
-        whitelist: data.whitelist || []
+        whitelist: migrateWhitelistToNewFormat(data.whitelist || [])
       };
 
       // Save default/migrated settings
@@ -231,8 +255,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       case 'allow-pip-pattern': {
         const suggestedPattern = suggestPatternForUrl(tab.url);
         if (suggestedPattern) {
-          newWhitelist = addWhitelistEntry(newWhitelist, 'pattern', suggestedPattern);
-          message = 'Section added to whitelist (pattern)';
+          // Validate pattern before adding
+          const validation = validatePattern(suggestedPattern);
+          if (validation.isValid) {
+            newWhitelist = addWhitelistEntry(newWhitelist, 'pattern', suggestedPattern);
+            message = 'Section added to whitelist (pattern)';
+          } else {
+            message = 'Cannot create valid pattern for this URL';
+          }
         } else {
           message = 'Cannot create pattern for this URL';
         }
@@ -325,7 +355,7 @@ chrome.storage.local.get(
     isEnabled = data.isEnabled || false;
     tabPause = data.tabPause || false;
     whitelistEnabled = data.whitelistEnabled || false;
-    whitelist = data.whitelist || [];
+    whitelist = migrateWhitelistToNewFormat(data.whitelist || []);
     detectionMode = data.detectionMode || 'manual';
     detectionIntervalMs = typeof data.detectionIntervalMs === 'number' ? data.detectionIntervalMs : 1000;
     updateIcon();
@@ -352,6 +382,8 @@ chrome.storage.onChanged.addListener((changes) => {
   
   if (changes.whitelist) {
     whitelist = changes.whitelist.newValue || [];
+    // Migrate legacy format if needed
+    whitelist = migrateWhitelistToNewFormat(whitelist);
   }
   if (changes.detectionMode) {
     detectionMode = changes.detectionMode.newValue || 'manual';
