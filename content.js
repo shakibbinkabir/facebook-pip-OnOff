@@ -15,14 +15,23 @@
     whitelist: [],
     lastCloseAt: 0,
     cooldownMs: 1000,
-    observersActive: false,
+  observersActive: false,
+  // Phase 3: Snooze state
+  snoozeUntil: 0, // epoch ms; 0 means not snoozed
+  tabSnoozed: false, // per-tab in-memory snooze until tab closes
+  showSnoozeToast: true,
   };
 
   // Guard: whitelist check
   function isWhitelistedUrl() {
-    if (!state.whitelistEnabled || !Array.isArray(state.whitelist) || state.whitelist.length === 0) return false;
+    if (!Array.isArray(state.whitelist) || state.whitelist.length === 0) return false;
     const currentUrl = location.href;
     return state.whitelist.some((entry) => currentUrl.includes(entry));
+  }
+
+  function isSnoozed() {
+    const now = Date.now();
+    return state.tabSnoozed || (typeof state.snoozeUntil === 'number' && state.snoozeUntil > now);
   }
 
   // Scheduler: adaptive ramp/backoff
@@ -64,8 +73,10 @@
     }
 
     function tryDetect() {
+      if (isSnoozed()) return; // short-circuit while snoozed
       // Multi-strategy PiP close attempt
-      detector.closeMiniPlayerIfPresent();
+      const closed = detector.closeMiniPlayerIfPresent();
+      if (closed && state.showSnoozeToast) toast.showUndoSnooze();
 
       // Auto backoff when initial fast window elapsed and nothing found recently
       if (state.detectionMode === 'auto') {
@@ -351,6 +362,7 @@
   function startIfAllowed() {
     if (!state.isEnabled) { log('disabled'); return; }
     if (isWhitelistedUrl()) { log('whitelisted; skipping all'); return; }
+  if (isSnoozed()) { log('snoozed; skipping all'); return; }
     lifecycle.connect();
     scheduler.start();
   }
@@ -376,37 +388,51 @@
     window.addEventListener('focus', playVideo);
   }
 
-  // Load settings and init
-  chrome.storage.local.get(
-    [
+  // Load settings and init (Phase 3 adds snooze + toast flag)
+  Promise.all([
+    new Promise((r) => chrome.storage.local.get([
       'isEnabled',
       'tabPause',
       'timerInterval', // legacy
       'whitelistEnabled',
       'whitelist',
       'detectionMode',
-      'detectionIntervalMs'
-    ],
-    (data) => {
-      state.isEnabled = !!data.isEnabled;
-      state.tabPause = !!data.tabPause;
-      state.whitelistEnabled = !!data.whitelistEnabled;
-      state.whitelist = Array.isArray(data.whitelist) ? data.whitelist : [];
-      state.detectionMode = data.detectionMode || 'manual';
-      state.detectionIntervalMs = typeof data.detectionIntervalMs === 'number'
-        ? data.detectionIntervalMs
-        : (typeof data.timerInterval === 'number' ? data.timerInterval : 1000);
+      'detectionIntervalMs',
+      'showSnoozeToast'
+    ], r)),
+    // session snooze (preferred for origin-scoped snooze)
+    (chrome.storage.session && chrome.storage.session.get)
+      ? new Promise((r) => chrome.storage.session.get(['snoozeUntil'], r))
+      : Promise.resolve({}),
+    // local fallback
+    new Promise((r) => chrome.storage.local.get(['snoozeUntil'], r))
+  ]).then(([data, sessionData, localData]) => {
+    state.isEnabled = !!data.isEnabled;
+    state.tabPause = !!data.tabPause;
+    state.whitelistEnabled = !!data.whitelistEnabled;
+    state.whitelist = Array.isArray(data.whitelist) ? data.whitelist : [];
+    state.detectionMode = data.detectionMode || 'manual';
+    state.detectionIntervalMs = typeof data.detectionIntervalMs === 'number'
+      ? data.detectionIntervalMs
+      : (typeof data.timerInterval === 'number' ? data.timerInterval : 1000);
+    state.showSnoozeToast = data.showSnoozeToast !== false;
 
-      log('init settings', { 
-        isEnabled: state.isEnabled,
-        detectionMode: state.detectionMode,
-        detectionIntervalMs: state.detectionIntervalMs
-      });
+    const su = (sessionData && typeof sessionData.snoozeUntil === 'number') ? sessionData.snoozeUntil
+             : (localData && typeof localData.snoozeUntil === 'number') ? localData.snoozeUntil
+             : 0;
+    state.snoozeUntil = su || 0;
 
-      setupTabPause();
-      startIfAllowed();
-    }
-  );
+    log('init settings', {
+      isEnabled: state.isEnabled,
+      detectionMode: state.detectionMode,
+      detectionIntervalMs: state.detectionIntervalMs,
+      snoozeUntil: state.snoozeUntil,
+      showSnoozeToast: state.showSnoozeToast
+    });
+
+    setupTabPause();
+    startIfAllowed();
+  });
 
   // Live updates via messages from popup/background
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -476,6 +502,54 @@
         return;
       }
 
+      // Phase 3: Snooze controls
+      if (message && message.type === 'SNOOZE_SET') {
+        const { until, scope } = message;
+        const t = Number(until) || 0;
+        if (scope === 'tab') {
+          state.tabSnoozed = true;
+          lifecycle.disconnect();
+          scheduler.stop();
+          sendResponse({ ok: true, applied: true, scope: 'tab' });
+          return;
+        }
+        // origin-wide snooze stored in session if available, else local
+        const payload = { snoozeUntil: t };
+        if (chrome.storage.session && chrome.storage.session.set) {
+          chrome.storage.session.set(payload);
+        } else {
+          chrome.storage.local.set(payload);
+        }
+        state.snoozeUntil = t;
+        lifecycle.disconnect();
+        scheduler.stop();
+        sendResponse({ ok: true, applied: true, scope: 'origin' });
+        return;
+      }
+
+      if (message && message.type === 'SNOOZE_CLEAR') {
+        state.tabSnoozed = false;
+        if (chrome.storage.session && chrome.storage.session.set) chrome.storage.session.set({ snoozeUntil: 0 });
+        chrome.storage.local.set({ snoozeUntil: 0 });
+        if (state.isEnabled && !isWhitelistedUrl()) {
+          lifecycle.connect();
+          scheduler.start();
+        }
+        sendResponse({ ok: true, cleared: true });
+        return;
+      }
+
+      if (message && message.type === 'GET_PAGE_STATE') {
+        sendResponse({
+          ok: true,
+          isWhitelisted: isWhitelistedUrl(),
+          isSnoozed: isSnoozed(),
+          snoozeUntil: state.snoozeUntil,
+          snoozeScope: state.tabSnoozed ? 'tab' : (state.snoozeUntil > Date.now() ? 'origin' : null)
+        });
+        return;
+      }
+
       if (message && message.type === 'PING') {
         sendResponse({ ok: true, alive: true });
         return;
@@ -484,4 +558,50 @@
       sendResponse({ ok: false, error: String(e) });
     }
   });
+
+  // Phase 3: Minimal in-page toast for quick snooze undo
+  const toast = (() => {
+    const ID = 'fbpip-toast';
+    function remove() {
+      const el = document.getElementById(ID);
+      if (el) el.remove();
+    }
+    function showUndoSnooze() {
+      try {
+        remove();
+        const el = document.createElement('div');
+        el.id = ID;
+        el.style.cssText = [
+          'position:fixed',
+          'right:16px',
+          'bottom:16px',
+          'z-index:2147483647',
+          'background:rgba(32,32,32,0.92)',
+          'color:#fff',
+          'padding:8px 12px',
+          'border-radius:999px',
+          'font:500 12px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,Arial,sans-serif',
+          'box-shadow:0 2px 8px rgba(0,0,0,0.2)',
+          'display:flex',
+          'gap:8px',
+          'align-items:center'
+        ].join(';');
+        const msg = document.createElement('span');
+        msg.textContent = 'PiP closed •';
+        const btn = document.createElement('button');
+        btn.textContent = 'Undo (Snooze 15m)';
+        btn.style.cssText = 'background:none;border:none;color:#4ea1ff;cursor:pointer;font:inherit;text-decoration:underline;';
+        btn.addEventListener('click', () => {
+          const until = Date.now() + 15 * 60 * 1000;
+          chrome.runtime.sendMessage({ type: 'SNOOZE_SET', until, scope: 'origin' }, () => {});
+          remove();
+        });
+        el.appendChild(msg);
+        el.appendChild(btn);
+        document.documentElement.appendChild(el);
+        setTimeout(remove, 2500);
+      } catch {}
+    }
+    return { showUndoSnooze };
+  })();
 })();

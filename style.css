@@ -524,3 +524,30 @@ button:focus, input:focus, select:focus { outline: 2px solid var(--accent-color)
 
 /* Non-Facebook helper */
 #nonFbHelper { margin-top: 8px; }
+
+/* Dropdown menu (Snooze) */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 6px 16px var(--shadow-color);
+    padding: 6px;
+    min-width: 180px;
+    z-index: 1000;
+}
+.dropdown-item {
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-color);
+}
+.dropdown-item:hover { background: var(--feedback-bg); }
+.dropdown-sep { height: 1px; background: var(--border-color); margin: 4px 2px; }
