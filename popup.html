@@ -29,34 +29,40 @@
 
         <!-- Home Tab -->
         <div class="tab-content active" id="home-content">
+            <div class="status-tile" id="statusTile" aria-live="polite">
+                <div class="status-icon-wrap" aria-hidden="true"><i id="statusTileIcon" class="fas fa-shield-alt"></i></div>
+                <div class="status-text">
+                    <div id="statusTitle" class="status-title">Protected: ON</div>
+                    <div id="statusSub" class="status-sub"></div>
+                </div>
+                <div id="detectionChip" class="chip" aria-label="Detection mode">Detection: Auto</div>
+            </div>
+
+            <div id="applyNote" class="apply-note" role="status" aria-live="polite" hidden>Changes applied after reload.</div>
+
             <div class="card">
                 <div class="card-title">Quick Controls</div>
                 <div class="setting-item">
                     <span class="setting-label">PiP Auto-Close</span>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="pipToggle">
+                        <input type="checkbox" id="pipToggle" aria-label="PiP Auto-Close">
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
                 <div class="setting-item">
-                    <span class="setting-label">Pause Video on Tab Switch</span>
+                    <span class="setting-label">Pause video on tab switch</span>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="tabToggle">
+                        <input type="checkbox" id="tabToggle" aria-label="Pause video on tab switch">
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
-            </div>
-
-            <div class="card">
-                <div class="card-title">Status</div>
-                <div id="statusIndicator" class="setting-item">
-                    <span class="setting-label">Protection Status</span>
-                    <div class="status-badge">
-                        <span id="statusText">Enabled</span>
-                        <span id="statusIcon" class="status-icon">
-                            <i class="fas fa-shield-alt"></i>
-                        </span>
-                    </div>
+                <div class="setting-item">
+                    <button id="whitelistToggleBtn" class="btn btn-secondary" aria-live="polite">Allow PiP on this page</button>
+                    <button id="snoozeBtn" class="btn btn-secondary" disabled title="Coming in Phase 3">Snooze PiP</button>
+                </div>
+                <div id="nonFbHelper" class="helper" hidden>
+                    Open Facebook to use controls.
+                    <button id="openFbBtn" class="btn btn-primary" aria-label="Open Facebook">Open Facebook</button>
                 </div>
             </div>
         </div>
@@ -64,16 +70,16 @@
         <!-- Settings Tab -->
         <div class="tab-content" id="settings-content">
             <div class="card">
-                <div class="card-title">Detection Settings</div>
-                <div class="settings-group">
-                    <div class="settings-group-title">Mode</div>
-                    <div class="setting-item">
-                        <span class="setting-label">Detection Speed</span>
-                        <select id="detectionMode">
-                            <option value="auto">Auto (recommended)</option>
-                            <option value="manual">Manual</option>
-                        </select>
-                    </div>
+                <div class="card-title">Detection Speed</div>
+                <div class="settings-group" role="radiogroup" aria-label="Detection Speed">
+                    <label class="radio">
+                        <input type="radio" name="detectionMode" id="modeAuto" value="auto">
+                        <span>Auto (recommended)</span>
+                    </label>
+                    <label class="radio">
+                        <input type="radio" name="detectionMode" id="modeManual" value="manual">
+                        <span>Manual</span>
+                    </label>
                 </div>
                 <div class="settings-group">
                     <div class="settings-group-title">Manual Interval</div>
@@ -82,34 +88,23 @@
                             <span>PiP Detection Speed</span>
                             <span class="slider-value"><span id="timerValue">1000</span>ms</span>
                         </label>
-                        <input type="range" id="timerSetting" min="200" max="3000" step="100" value="1000">
+                        <input type="range" id="timerSetting" min="200" max="3000" step="100" value="1000" aria-label="Manual detection interval">
                     </div>
-                    <small>In Auto mode, this slider is disabled. Faster detection may use more resources.</small>
+                    <small id="autoHelper">Auto adjusts speed dynamically.</small>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-title">Advanced Settings</div>
+                <div class="card-title">Whitelist (basic)</div>
                 <div class="advanced-settings">
                     <div class="setting-item">
-                        <span class="setting-label">Whitelist Mode</span>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="whitelistToggle">
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                    
-                    <div id="whitelistSection" style="display: none;">
-                        <div class="settings-group-title">Whitelist Pages</div>
-                        <small>Add Facebook URLs where PiP should remain enabled</small>
-                        <div class="whitelist-input">
-                            <input type="text" id="whitelistInput" placeholder="facebook.com/page-name">
-                            <button id="addWhitelist">Add</button>
-                        </div>
-                        <div id="whitelistItems" class="whitelist-items">
-                            <!-- Whitelist items will be added dynamically -->
+                        <div class="links">
+                            <button id="addCurrentBtn" class="link-btn">Add current page</button>
+                            <button id="removeCurrentBtn" class="link-btn">Remove current page</button>
                         </div>
                     </div>
+                    <small>Phase 4 will add patterns.</small>
+                    <div id="whitelistItems" class="whitelist-items" aria-live="polite"></div>
                 </div>
             </div>
         </div>
@@ -119,6 +114,12 @@
             <div class="card">
                 <div class="card-title">Send Feedback</div>
                 <div class="feedback-section">
+                    <label class="settings-group-title" for="feedbackCategory">Category</label>
+                    <select id="feedbackCategory" aria-label="Category">
+                        <option>Bug</option>
+                        <option>Idea</option>
+                        <option>Other</option>
+                    </select>
                     <textarea id="feedbackText" placeholder="Share your thoughts, suggestions, or report bugs..." rows="5"></textarea>
                     <button id="sendFeedback" class="btn btn-primary">
                         <i class="fas fa-paper-plane"></i> Send Feedback
@@ -135,7 +136,7 @@
         </div>
     </div>
 
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
     
     <script src="popup.js"></script>
 </body>
