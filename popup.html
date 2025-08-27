@@ -104,15 +104,21 @@
             </div>
 
             <div class="card">
-                <div class="card-title">Whitelist (basic)</div>
+                <div class="card-title">Whitelist (Pattern Support)</div>
                 <div class="advanced-settings">
+                    <div class="whitelist-input-section">
+                        <div class="input-group">
+                            <input type="text" id="whitelistInput" placeholder="Enter URL or pattern (e.g., https://www.facebook.com/watch/*)" />
+                            <button id="addPatternBtn" class="btn btn-primary">Add</button>
+                        </div>
+                        <div id="validationError" class="validation-error" hidden></div>
+                    </div>
                     <div class="setting-item">
-                        <div class="links">
-                            <button id="addCurrentBtn" class="link-btn">Add current page</button>
-                            <button id="removeCurrentBtn" class="link-btn">Remove current page</button>
+                        <div class="quick-actions">
+                            <button id="addCurrentExactBtn" class="btn btn-secondary">Add current page (exact)</button>
+                            <button id="addCurrentPatternBtn" class="btn btn-secondary">Add current section (pattern)</button>
                         </div>
                     </div>
-                    <small>Phase 4 will add patterns.</small>
                     <div id="whitelistItems" class="whitelist-items" aria-live="polite"></div>
                 </div>
             </div>

@@ -422,20 +422,86 @@ input[type="range"]::-webkit-slider-thumb {
     cursor: pointer;
 }
 
-.whitelist-items {
-    margin-top: 10px;
-    max-height: 100px;
-    overflow-y: auto;
+/* Phase 4: Enhanced whitelist styles */
+.whitelist-input-section {
+    margin-bottom: 12px;
+}
+
+.input-group {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.input-group input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    font-size: 14px;
+}
+
+.input-group input:focus {
+    border-color: var(--accent-color);
+    outline: none;
+}
+
+.validation-error {
+    color: var(--danger-color);
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.quick-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .whitelist-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 5px;
+    padding: 8px;
     background-color: var(--input-bg);
-    border-radius: 4px;
-    margin-bottom: 5px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.whitelist-item-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.whitelist-url {
+    font-size: 13px;
+    word-break: break-all;
+    flex: 1;
+}
+
+.whitelist-chip {
+    padding: 2px 6px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.chip-exact {
+    background: var(--success-color);
+    color: white;
+}
+
+.chip-pattern {
+    background: var(--accent-color);
+    color: white;
 }
 
 .whitelist-item button {
@@ -443,7 +509,20 @@ input[type="range"]::-webkit-slider-thumb {
     color: var(--danger-color);
     border: none;
     cursor: pointer;
-    font-size: 18px;
+    font-size: 16px;
+    padding: 4px;
+    border-radius: 4px;
+    margin-left: 8px;
+}
+
+.whitelist-item button:hover {
+    background-color: var(--toggle-bg);
+}
+
+.whitelist-items {
+    margin-top: 12px;
+    max-height: 150px;
+    overflow-y: auto;
 }
 
 .footer {

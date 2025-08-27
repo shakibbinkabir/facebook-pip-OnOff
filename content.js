@@ -22,11 +22,82 @@
   showSnoozeToast: true,
   };
 
-  // Guard: whitelist check
+  // Phase 4: Pattern utilities (shared with popup.js logic)
+  function normalizeUrlForWhitelist(raw) {
+    try {
+      const u = new URL(raw);
+      return `${u.origin}${u.pathname}`.replace(/\/$/, '');
+    } catch { return raw; }
+  }
+
+  function patternToRegex(pattern) {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    const withWildcards = escaped.replace(/\*/g, '.*');
+    return new RegExp(`^${withWildcards}$`);
+  }
+
+  function migrateWhitelistToNewFormat(oldWhitelist) {
+    if (!Array.isArray(oldWhitelist)) return [];
+    
+    if (oldWhitelist.length > 0 && typeof oldWhitelist[0] === 'object' && oldWhitelist[0].type) {
+      return oldWhitelist;
+    }
+
+    return oldWhitelist.map(url => ({
+      type: 'exact',
+      value: normalizeUrlForWhitelist(url),
+      createdAt: Date.now()
+    }));
+  }
+
+  // Compiled whitelist cache for performance
+  const whitelistCache = {
+    exactSet: new Set(),
+    patternRegexes: [],
+    lastUpdated: 0
+  };
+
+  function compileWhitelistCache(entries) {
+    const migrated = migrateWhitelistToNewFormat(entries);
+    whitelistCache.exactSet.clear();
+    whitelistCache.patternRegexes.length = 0;
+    
+    migrated.forEach(entry => {
+      if (entry.type === 'exact') {
+        whitelistCache.exactSet.add(entry.value);
+      } else if (entry.type === 'pattern') {
+        try {
+          const regex = patternToRegex(entry.value);
+          whitelistCache.patternRegexes.push({ pattern: entry.value, regex });
+        } catch (e) {
+          log('Failed to compile pattern:', entry.value, e);
+        }
+      }
+    });
+    
+    whitelistCache.lastUpdated = Date.now();
+    log('Compiled whitelist cache:', whitelistCache.exactSet.size, 'exact,', whitelistCache.patternRegexes.length, 'patterns');
+  }
+
+  // Guard: whitelist check - Phase 4: Pattern-aware
   function isWhitelistedUrl() {
     if (!Array.isArray(state.whitelist) || state.whitelist.length === 0) return false;
-    const currentUrl = location.href;
-    return state.whitelist.some((entry) => currentUrl.includes(entry));
+    
+    const currentUrl = normalizeUrlForWhitelist(location.href);
+    
+    // Check exact matches first (fastest)
+    if (whitelistCache.exactSet.has(currentUrl)) {
+      return true;
+    }
+    
+    // Check pattern matches
+    return whitelistCache.patternRegexes.some(({ regex }) => {
+      try {
+        return regex.test(currentUrl);
+      } catch {
+        return false;
+      }
+    });
   }
 
   function isSnoozed() {
@@ -411,6 +482,8 @@
     state.tabPause = !!data.tabPause;
     state.whitelistEnabled = !!data.whitelistEnabled;
     state.whitelist = Array.isArray(data.whitelist) ? data.whitelist : [];
+    // Phase 4: Compile whitelist cache for pattern matching
+    compileWhitelistCache(state.whitelist);
     state.detectionMode = data.detectionMode || 'manual';
     state.detectionIntervalMs = typeof data.detectionIntervalMs === 'number'
       ? data.detectionIntervalMs
@@ -434,6 +507,27 @@
     startIfAllowed();
   });
 
+  // Phase 4: Listen for storage changes to update whitelist cache
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.whitelist) {
+      state.whitelist = changes.whitelist.newValue || [];
+      compileWhitelistCache(state.whitelist);
+      log('Whitelist updated from storage change');
+      
+      // Recheck if current page should still have observers running
+      const wasActive = state.observersActive;
+      const shouldBeActive = state.isEnabled && !isWhitelistedUrl() && !isSnoozed();
+      
+      if (wasActive && !shouldBeActive) {
+        lifecycle.disconnect();
+        scheduler.stop();
+      } else if (!wasActive && shouldBeActive) {
+        lifecycle.connect();
+        scheduler.start();
+      }
+    }
+  });
+
   // Live updates via messages from popup/background
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
@@ -447,6 +541,11 @@
           if (typeof message.payload.tabPause === 'boolean') state.tabPause = message.payload.tabPause;
           if (typeof message.payload.detectionMode === 'string') state.detectionMode = message.payload.detectionMode;
           if (typeof message.payload.detectionIntervalMs === 'number') state.detectionIntervalMs = message.payload.detectionIntervalMs;
+          // Phase 4: Handle whitelist updates
+          if (Array.isArray(message.payload.whitelist)) {
+            state.whitelist = message.payload.whitelist;
+            compileWhitelistCache(state.whitelist);
+          }
         }
 
         // Update tab pause listeners
@@ -478,20 +577,21 @@
       }
 
       if (message && message.type === 'WHITELIST_STATUS_CHANGED') {
-        // If this tab's URL is whitelisted now, stop; if removed, start (if enabled)
-        const url = message.url || location.href;
-        const affected = typeof url === 'string' ? location.href.includes(url) || url.includes(location.href) : false;
-        if (!affected) {
-          sendResponse({ ok: true, applied: false });
-          return;
+        // Phase 4: Recompile cache and check current page status
+        if (message.newWhitelist) {
+          state.whitelist = message.newWhitelist;
+          compileWhitelistCache(state.whitelist);
         }
-
-        if (message.isWhitelisted) {
+        
+        // Check if current page is now whitelisted
+        const isNowWhitelisted = isWhitelistedUrl();
+        
+        if (isNowWhitelisted) {
           lifecycle.disconnect();
           scheduler.stop();
           sendResponse({ ok: true, applied: true, stopped: true });
         } else {
-          if (state.isEnabled) {
+          if (state.isEnabled && !isSnoozed()) {
             lifecycle.connect();
             scheduler.start();
             sendResponse({ ok: true, applied: true, started: true });

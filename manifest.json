@@ -3,7 +3,7 @@
   "name": "Facebook PiP Blocker",
   "version": "1.0.1",
   "description": "Automatically closes Facebook's PiP mini-player with customizable settings and modern UI.",
-  "permissions": ["storage", "scripting", "activeTab"],
+  "permissions": ["storage", "scripting", "activeTab", "contextMenus"],
   "host_permissions": ["*://www.facebook.com/*"],
   "background": {
     "service_worker": "background.js"
