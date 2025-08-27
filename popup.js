@@ -4,51 +4,56 @@ document.addEventListener("DOMContentLoaded", () => {
   const tabPauseToggle = document.getElementById("tabToggle");
   const timerSlider = document.getElementById("timerSetting");
   const timerValue = document.getElementById("timerValue");
-  const detectionModeEl = document.getElementById("detectionMode");
-  const whitelistToggle = document.getElementById("whitelistToggle");
-  const whitelistSection = document.getElementById("whitelistSection");
-  const whitelistInput = document.getElementById("whitelistInput");
-  const addWhitelistBtn = document.getElementById("addWhitelist");
   const whitelistItems = document.getElementById("whitelistItems");
   const themeToggle = document.getElementById("themeToggle");
   const navTabs = document.querySelectorAll(".nav-tab");
-  const statusText = document.getElementById("statusText");
-  const statusIcon = document.getElementById("statusIcon");
+  // Phase 2 additions
+  const statusTile = document.getElementById("statusTile");
+  const statusTitle = document.getElementById("statusTitle");
+  const statusSub = document.getElementById("statusSub");
+  const statusTileIcon = document.getElementById("statusTileIcon");
+  const detectionChip = document.getElementById("detectionChip");
+  const applyNote = document.getElementById("applyNote");
+  const whitelistToggleBtn = document.getElementById("whitelistToggleBtn");
+  const modeAuto = document.getElementById("modeAuto");
+  const modeManual = document.getElementById("modeManual");
+  const addCurrentBtn = document.getElementById("addCurrentBtn");
+  const removeCurrentBtn = document.getElementById("removeCurrentBtn");
+  const nonFbHelper = document.getElementById("nonFbHelper");
+  const openFbBtn = document.getElementById("openFbBtn");
 
   // Initialize theme
   initTheme();
 
-  // Load saved settings
-  chrome.storage.local.get(
-    ["isEnabled", "tabPause", "timerInterval", "theme", "whitelistEnabled", "whitelist", "detectionMode", "detectionIntervalMs"],
-    (data) => {
-      // Core settings
+  // Load saved settings + active tab in parallel
+  Promise.all([
+    new Promise(resolve => chrome.tabs.query({ active: true, currentWindow: true }, tabs => resolve(tabs?.[0] || null))),
+    new Promise(resolve => chrome.storage.local.get(["isEnabled", "tabPause", "timerInterval", "theme", "whitelist", "detectionMode", "detectionIntervalMs"], resolve))
+  ]).then(([activeTab, data]) => {
+      const isFacebook = !!(activeTab?.url && /https?:\/\/(www\.)?facebook\.com/i.test(activeTab.url));
+      const currentUrl = activeTab?.url || '';
+
       pipToggle.checked = data.isEnabled || false;
       tabPauseToggle.checked = data.tabPause || false;
-      
-      // Timer settings
+
       const savedInterval = typeof data.detectionIntervalMs === 'number' ? data.detectionIntervalMs : (data.timerInterval || 1000);
       timerSlider.value = savedInterval;
       timerValue.textContent = savedInterval;
 
-      // Detection mode
       const mode = data.detectionMode || 'manual';
-      detectionModeEl.value = mode;
+      (mode === 'auto' ? modeAuto : modeManual).checked = true;
       setManualSliderDisabled(mode === 'auto');
-      
-      // Whitelist settings
-      whitelistToggle.checked = data.whitelistEnabled || false;
-      whitelistSection.style.display = data.whitelistEnabled ? "block" : "none";
-      
-      // Load whitelist items
-      if (data.whitelist && Array.isArray(data.whitelist)) {
-        data.whitelist.forEach(item => addWhitelistItem(item));
-      }
-      
-      // Update status indicators
-      updateStatusIndicator(pipToggle.checked);
-    }
-  );
+
+      renderWhitelistList(data.whitelist);
+      updateWhitelistUiForCurrent(currentUrl, data.whitelist);
+
+      renderStatusTile({ isFacebook, isEnabled: pipToggle.checked, isWhitelisted: isUrlWhitelisted(currentUrl, data.whitelist), mode });
+
+      nonFbHelper.hidden = isFacebook;
+      pipToggle.disabled = !isFacebook;
+      tabPauseToggle.disabled = !isFacebook;
+      whitelistToggleBtn.disabled = !isFacebook;
+  });
 
   // Tab navigation
   navTabs.forEach(tab => {
@@ -80,70 +85,83 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.storage.local.set({ theme: newTheme });
   });
 
-  // Core toggle handlers
-  pipToggle.addEventListener("change", () => {
-    chrome.storage.local.set({ isEnabled: pipToggle.checked }, () => {
-      updateStatusIndicator(pipToggle.checked);
-      showToast(pipToggle.checked ? "PiP Auto-Close enabled" : "PiP Auto-Close disabled");
-      reloadCurrentTab();
+  // Core toggle handlers with instant apply
+  pipToggle.addEventListener("change", async () => {
+    const isEnabled = pipToggle.checked;
+    chrome.storage.local.set({ isEnabled }, async () => {
+      showToast(isEnabled ? "PiP Auto-Close enabled" : "PiP Auto-Close disabled");
+      renderStatusTile(await computeStatus());
+      const applied = await sendSettingsUpdated({ isEnabled });
+      if (!applied) noteReload();
     });
   });
 
-  tabPauseToggle.addEventListener("change", () => {
-    chrome.storage.local.set({ tabPause: tabPauseToggle.checked }, () => {
-      showToast(tabPauseToggle.checked ? "Tab Pause enabled" : "Tab Pause disabled");
-      reloadCurrentTab();
+  tabPauseToggle.addEventListener("change", async () => {
+    const tabPause = tabPauseToggle.checked;
+    chrome.storage.local.set({ tabPause }, async () => {
+      showToast(tabPause ? "Tab Pause enabled" : "Tab Pause disabled");
+      const applied = await sendSettingsUpdated({ tabPause });
+      if (!applied) noteReload();
     });
   });
 
-  // Timer settings
+  // Timer settings (instant apply)
   timerSlider.addEventListener("input", () => {
     timerValue.textContent = timerSlider.value;
-    chrome.storage.local.set({ timerInterval: Number(timerSlider.value), detectionIntervalMs: Number(timerSlider.value) }, () => {
-      if (pipToggle.checked) {
-        showToast(`Detection interval set to ${timerSlider.value}ms`);
-        reloadCurrentTab();
-      }
+    const detectionIntervalMs = Number(timerSlider.value);
+    chrome.storage.local.set({ timerInterval: detectionIntervalMs, detectionIntervalMs }, async () => {
+      showToast(`Detection interval set to ${timerSlider.value}ms`);
+      await sendSettingsUpdated({ detectionIntervalMs });
     });
   });
 
-  // Detection mode handler
-  detectionModeEl.addEventListener('change', () => {
-    const mode = detectionModeEl.value;
+  // Detection mode radios
+  ;[modeAuto, modeManual].forEach(r => r.addEventListener('change', async () => {
+    const mode = modeAuto.checked ? 'auto' : 'manual';
     setManualSliderDisabled(mode === 'auto');
-    chrome.storage.local.set({ detectionMode: mode }, () => {
+    detectionChip.textContent = `Detection: ${mode === 'auto' ? 'Auto' : 'Manual'}`;
+    chrome.storage.local.set({ detectionMode: mode }, async () => {
       showToast(mode === 'auto' ? 'Detection: Auto (recommended)' : 'Detection: Manual');
-      if (pipToggle.checked) reloadCurrentTab();
+      await sendSettingsUpdated({ detectionMode: mode });
     });
+  }));
+
+  // One-click whitelist toggle for current page
+  whitelistToggleBtn.addEventListener('click', async () => {
+    const { activeTab, whitelist } = await getActiveAndWhitelist();
+    if (!activeTab?.url) return;
+    const currentUrl = activeTab.url;
+    const isWL = isUrlWhitelisted(currentUrl, whitelist);
+    const next = toggleWhitelistEntry(whitelist, currentUrl, !isWL);
+    await new Promise(r => chrome.storage.local.set({ whitelist: next }, r));
+    renderWhitelistList(next);
+    updateWhitelistUiForCurrent(currentUrl, next);
+    renderStatusTile(await computeStatus());
+    await notifyWhitelistChange(currentUrl, !isWL);
+    showToast(!isWL ? 'Added to whitelist' : 'Removed from whitelist');
   });
 
-  // Whitelist functionality
-  whitelistToggle.addEventListener("change", () => {
-    const isEnabled = whitelistToggle.checked;
-    whitelistSection.style.display = isEnabled ? "block" : "none";
-    chrome.storage.local.set({ whitelistEnabled: isEnabled }, () => {
-      showToast(isEnabled ? "Whitelist mode enabled" : "Whitelist mode disabled");
-      if (pipToggle.checked) reloadCurrentTab();
-    });
+  // Settings-tab whitelist links
+  addCurrentBtn.addEventListener('click', async () => {
+    const { activeTab, whitelist } = await getActiveAndWhitelist();
+    if (!activeTab?.url) return;
+    const next = toggleWhitelistEntry(whitelist, activeTab.url, true);
+    await new Promise(r => chrome.storage.local.set({ whitelist: next }, r));
+    renderWhitelistList(next);
+    updateWhitelistUiForCurrent(activeTab.url, next);
+    renderStatusTile(await computeStatus());
+    await notifyWhitelistChange(activeTab.url, true);
   });
 
-  addWhitelistBtn.addEventListener("click", () => {
-    const url = whitelistInput.value.trim();
-    if (!url) return showToast("Please enter a valid URL", "error");
-    
-    chrome.storage.local.get(["whitelist"], (data) => {
-      const whitelist = data.whitelist || [];
-      if (whitelist.includes(url)) {
-        return showToast("This URL is already in the whitelist", "error");
-      }
-      
-      whitelist.push(url);
-      chrome.storage.local.set({ whitelist }, () => {
-        addWhitelistItem(url);
-        whitelistInput.value = "";
-        showToast("URL added to whitelist");
-      });
-    });
+  removeCurrentBtn.addEventListener('click', async () => {
+    const { activeTab, whitelist } = await getActiveAndWhitelist();
+    if (!activeTab?.url) return;
+    const next = toggleWhitelistEntry(whitelist, activeTab.url, false);
+    await new Promise(r => chrome.storage.local.set({ whitelist: next }, r));
+    renderWhitelistList(next);
+    updateWhitelistUiForCurrent(activeTab.url, next);
+    renderStatusTile(await computeStatus());
+    await notifyWhitelistChange(activeTab.url, false);
   });
 
   // Send feedback via Email API
@@ -197,6 +215,13 @@ document.addEventListener("DOMContentLoaded", () => {
         chrome.storage.local.set({ whitelist: newWhitelist }, () => {
           item.remove();
           showToast("URL removed from whitelist");
+          chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+            const tab = tabs?.[0];
+            if (tab?.id && tab.url && tab.url.includes(urlToRemove)) {
+              await notifyWhitelistChange(tab.url, false);
+              renderStatusTile(await computeStatus());
+            }
+          });
         });
       });
     });
@@ -214,18 +239,75 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 3000);
   }
 
-  function updateStatusIndicator(isEnabled) {
-    if (isEnabled) {
-      statusText.textContent = "Active";
-      statusText.style.color = "var(--success-color)";
-      statusIcon.innerHTML = '<i class="fas fa-shield-alt"></i>';
-      statusIcon.style.color = "var(--success-color)";
+  function isUrlWhitelisted(url, list) {
+    if (!Array.isArray(list)) return false;
+    return list.some(entry => url.includes(entry));
+  }
+
+  function normalizeUrlForWhitelist(raw) {
+    try {
+      const u = new URL(raw);
+      return `${u.origin}${u.pathname}`.replace(/\/$/, '');
+    } catch { return raw; }
+  }
+
+  function toggleWhitelistEntry(whitelist, url, add) {
+    const entry = normalizeUrlForWhitelist(url);
+    const list = Array.isArray(whitelist) ? [...whitelist] : [];
+    const exists = list.some(i => i === entry || url.includes(i));
+    if (add) {
+      if (!exists) list.push(entry);
     } else {
-      statusText.textContent = "Inactive";
-      statusText.style.color = "var(--danger-color)";
-      statusIcon.innerHTML = '<i class="fas fa-shield-alt fa-slash"></i>';
-      statusIcon.style.color = "var(--danger-color)";
+      return list.filter(i => i !== entry);
     }
+    return list;
+  }
+
+  async function getActiveAndWhitelist() {
+    const [tabs, store] = await Promise.all([
+      new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r)),
+      new Promise(r => chrome.storage.local.get(['whitelist'], r)),
+    ]);
+    return { activeTab: tabs?.[0] || null, whitelist: store.whitelist || [] };
+  }
+
+  function updateWhitelistUiForCurrent(url, whitelist) {
+    const isWL = isUrlWhitelisted(url, whitelist);
+    whitelistToggleBtn.textContent = isWL ? 'Remove from whitelist' : 'Allow PiP on this page';
+  }
+
+  function renderWhitelistList(list) {
+    whitelistItems.innerHTML = '';
+    (Array.isArray(list) ? list : []).forEach(url => addWhitelistItem(url));
+  }
+
+  async function computeStatus() {
+    const [tabs, store] = await Promise.all([
+      new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r)),
+      new Promise(r => chrome.storage.local.get(['isEnabled','detectionMode','whitelist']), r)
+    ]);
+    const tab = tabs?.[0];
+    const isFacebook = !!(tab?.url && /https?:\/\/(www\.)?facebook\.com/i.test(tab.url));
+    const isWhitelisted = isUrlWhitelisted(tab?.url || '', store.whitelist || []);
+    return { isFacebook, isEnabled: !!store.isEnabled, isWhitelisted, mode: store.detectionMode || 'manual', url: tab?.url || '' };
+  }
+
+  function renderStatusTile({ isFacebook, isEnabled, isWhitelisted, mode }) {
+    const active = isFacebook && isEnabled && !isWhitelisted;
+    if (isWhitelisted) {
+      statusTitle.textContent = 'OFF on this page (whitelisted)';
+      statusTileIcon.className = 'fas fa-ban';
+      statusTile.style.borderColor = 'var(--border-color)';
+    } else if (active) {
+      statusTitle.textContent = 'Protected: ON';
+      statusTileIcon.className = 'fas fa-shield-alt';
+      statusTile.style.borderColor = 'var(--success-color)';
+    } else {
+      statusTitle.textContent = 'Protection: OFF';
+      statusTileIcon.className = 'fas fa-shield-alt fa-slash';
+      statusTile.style.borderColor = 'var(--danger-color)';
+    }
+    detectionChip.textContent = `Detection: ${mode === 'auto' ? 'Auto' : 'Manual'}`;
   }
 
   function initTheme() {
@@ -243,4 +325,36 @@ document.addEventListener("DOMContentLoaded", () => {
     timerSlider.disabled = disabled;
     timerSlider.classList.toggle('disabled', disabled);
   }
+
+  async function sendSettingsUpdated(patch) {
+    const tabs = await new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r));
+    const tab = tabs?.[0];
+    if (!tab?.id) return false;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'SETTINGS_UPDATED', payload: patch });
+      return !!(res && res.ok);
+    } catch { return false; }
+  }
+
+  async function notifyWhitelistChange(url, isWhitelisted) {
+    const tabs = await new Promise(r => chrome.tabs.query({ active: true, currentWindow: true }, r));
+    const tab = tabs?.[0];
+    if (!tab?.id) return false;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'WHITELIST_STATUS_CHANGED', url, isWhitelisted });
+      return !!(res && res.ok);
+    } catch { return false; }
+  }
+
+  function noteReload() {
+    applyNote.hidden = false;
+    requestAnimationFrame(() => {
+      setTimeout(() => { applyNote.hidden = true; }, 2500);
+    });
+  }
+
+  // Non-Facebook helper
+  openFbBtn?.addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://www.facebook.com/' });
+  });
 });

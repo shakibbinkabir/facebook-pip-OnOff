@@ -407,4 +407,81 @@
       startIfAllowed();
     }
   );
+
+  // Live updates via messages from popup/background
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    try {
+      if (message && message.type === 'SETTINGS_UPDATED') {
+        const prevEnabled = state.isEnabled;
+        const prevMode = state.detectionMode;
+        const prevInterval = state.detectionIntervalMs;
+
+        if (message.payload) {
+          if (typeof message.payload.isEnabled === 'boolean') state.isEnabled = message.payload.isEnabled;
+          if (typeof message.payload.tabPause === 'boolean') state.tabPause = message.payload.tabPause;
+          if (typeof message.payload.detectionMode === 'string') state.detectionMode = message.payload.detectionMode;
+          if (typeof message.payload.detectionIntervalMs === 'number') state.detectionIntervalMs = message.payload.detectionIntervalMs;
+        }
+
+        // Update tab pause listeners
+        // Simpler approach: re-run setup (listeners internally guard duplicates)
+        // For this phase, we won't remove old handlers explicitly beyond lifecycle connections.
+
+        // Apply changes to scheduler/lifecycle without reload
+        const wasActive = prevEnabled && !isWhitelistedUrl();
+        const shouldBeActive = state.isEnabled && !isWhitelistedUrl();
+
+        if (wasActive && !shouldBeActive) {
+          // Turn off
+          lifecycle.disconnect();
+          scheduler.stop();
+        } else if (!wasActive && shouldBeActive) {
+          // Turn on
+          lifecycle.connect();
+          scheduler.start();
+        } else if (shouldBeActive) {
+          // Still active; if mode/interval changed, restart scheduler to apply
+          if (prevMode !== state.detectionMode || prevInterval !== state.detectionIntervalMs) {
+            scheduler.stop();
+            scheduler.start();
+          }
+        }
+
+        sendResponse({ ok: true, applied: true });
+        return; // no async work
+      }
+
+      if (message && message.type === 'WHITELIST_STATUS_CHANGED') {
+        // If this tab's URL is whitelisted now, stop; if removed, start (if enabled)
+        const url = message.url || location.href;
+        const affected = typeof url === 'string' ? location.href.includes(url) || url.includes(location.href) : false;
+        if (!affected) {
+          sendResponse({ ok: true, applied: false });
+          return;
+        }
+
+        if (message.isWhitelisted) {
+          lifecycle.disconnect();
+          scheduler.stop();
+          sendResponse({ ok: true, applied: true, stopped: true });
+        } else {
+          if (state.isEnabled) {
+            lifecycle.connect();
+            scheduler.start();
+            sendResponse({ ok: true, applied: true, started: true });
+          } else {
+            sendResponse({ ok: true, applied: false });
+          }
+        }
+        return;
+      }
+
+      if (message && message.type === 'PING') {
+        sendResponse({ ok: true, alive: true });
+        return;
+      }
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e) });
+    }
+  });
 })();

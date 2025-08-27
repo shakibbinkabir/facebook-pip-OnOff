@@ -459,3 +459,68 @@ input[type="range"]::-webkit-slider-thumb {
 .version {
     font-style: italic;
 }
+
+/* Status tile */
+.status-tile {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+.status-icon-wrap {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--toggle-bg);
+    color: var(--accent-color);
+}
+.status-title {
+    font-weight: 700;
+}
+.status-sub { font-size: 12px; opacity: .8; }
+.chip {
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: var(--toggle-bg);
+    color: var(--text-color);
+    font-size: 12px;
+}
+.apply-note { font-size: 12px; color: var(--accent-color); margin-bottom: 8px; }
+.helper { font-size: 12px; opacity: .9; margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+
+/* Radio styles */
+.radio { display: inline-flex; align-items: center; gap: 8px; margin-right: 12px; cursor: pointer; }
+.radio input { accent-color: var(--accent-color); }
+
+/* Link-like buttons */
+.links { display: flex; gap: 10px; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent-color); cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+
+/* Accessible focus */
+button:focus, input:focus, select:focus { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+
+/* Select generic style reuse (feedback category) */
+#feedbackCategory {
+    display: block;
+    width: 100%;
+    min-height: 36px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    font: inherit;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+/* Non-Facebook helper */
+#nonFbHelper { margin-top: 8px; }
